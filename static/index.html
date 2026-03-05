@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>GitHub Repo Summarizer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        margin: 0;
+        padding: 0;
+        background-color: #f7f7f8;
+        color: #111827;
+      }
+
+      .container {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 2rem 1.5rem 3rem;
+      }
+
+      h1 {
+        font-size: 1.8rem;
+        margin-bottom: 0.5rem;
+      }
+
+      p.description {
+        margin-top: 0;
+        color: #4b5563;
+      }
+
+      form {
+        margin-top: 1.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+      }
+
+      label {
+        font-weight: 500;
+      }
+
+      input[type="text"] {
+        padding: 0.6rem 0.8rem;
+        border-radius: 0.375rem;
+        border: 1px solid #d1d5db;
+        font-size: 0.95rem;
+        width: 100%;
+        box-sizing: border-box;
+      }
+
+      button {
+        align-self: flex-start;
+        padding: 0.6rem 1.2rem;
+        border-radius: 0.375rem;
+        border: none;
+        background-color: #2563eb;
+        color: white;
+        font-weight: 500;
+        cursor: pointer;
+        font-size: 0.95rem;
+      }
+
+      button:disabled {
+        background-color: #9ca3af;
+        cursor: not-allowed;
+      }
+
+      #status {
+        margin-top: 1rem;
+        min-height: 1.2rem;
+        color: #6b7280;
+        font-size: 0.9rem;
+      }
+
+      .error {
+        color: #b91c1c;
+      }
+
+      .result {
+        margin-top: 2rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid #e5e7eb;
+      }
+
+      .result-section {
+        margin-bottom: 1.5rem;
+      }
+
+      .result-section h2 {
+        font-size: 1.1rem;
+        margin-bottom: 0.5rem;
+      }
+
+      .result-section p,
+      .result-section ul {
+        margin: 0;
+        font-size: 0.95rem;
+        line-height: 1.5;
+      }
+
+      .config-section {
+        margin-top: 2rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+      }
+
+      .config-section input[type="range"],
+      .config-section input[type="number"],
+      .config-section select {
+        width: 100%;
+        max-width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>GitHub Repo Summarizer</h1>
+      <p class="description">
+        Enter the URL of a public GitHub repository to generate a summary of
+        what it does, which technologies it uses, and how it is structured.
+      </p>
+
+      <form id="summarize-form">
+        <label for="github-url">GitHub repository URL</label>
+        <input
+          type="text"
+          id="github-url"
+          name="github-url"
+          placeholder="https://github.com/owner/repo"
+          required
+        />
+        <button type="submit" id="submit-button">Summarize</button>
+      </form>
+
+      <div class="config-section">
+        <h2>LLM configuration</h2>
+        <p class="description">
+          Adjust how the language model behaves for each summary request.
+        </p>
+
+        <label for="temperature">
+          Temperature
+          (<span id="temperature-value">0.20</span>)
+        </label>
+        <input
+          type="range"
+          id="temperature"
+          min="0"
+          max="2"
+          step="0.05"
+          value="0.2"
+        />
+
+        <label for="top-p">
+          Top-p (nucleus sampling)
+          (<span id="top-p-value">0.90</span>)
+        </label>
+        <input
+          type="range"
+          id="top-p"
+          min="0"
+          max="1"
+          step="0.05"
+          value="0.9"
+        />
+
+        <label for="max-tokens">Max tokens</label>
+        <input
+          type="number"
+          id="max-tokens"
+          min="64"
+          max="4096"
+          step="64"
+          value="512"
+        />
+
+        <label for="model">Model (optional override)</label>
+        <select id="model">
+          <option value="">Use server default</option>
+          <option value="gpt-4o-mini">gpt-4o-mini</option>
+          <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+          <option value="gpt-4.1">gpt-4.1</option>
+        </select>
+      </div>
+
+      <div id="status"></div>
+
+      <div class="result" id="result" style="display: none">
+        <div class="result-section">
+          <h2>Summary</h2>
+          <p id="summary"></p>
+        </div>
+        <div class="result-section">
+          <h2>Technologies</h2>
+          <ul id="technologies"></ul>
+        </div>
+        <div class="result-section">
+          <h2>Structure</h2>
+          <p id="structure"></p>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const form = document.getElementById("summarize-form");
+      const urlInput = document.getElementById("github-url");
+      const statusEl = document.getElementById("status");
+      const resultEl = document.getElementById("result");
+      const summaryEl = document.getElementById("summary");
+      const technologiesEl = document.getElementById("technologies");
+      const structureEl = document.getElementById("structure");
+      const submitButton = document.getElementById("submit-button");
+
+      const temperatureInput = document.getElementById("temperature");
+      const temperatureValue = document.getElementById("temperature-value");
+      const topPInput = document.getElementById("top-p");
+      const topPValue = document.getElementById("top-p-value");
+      const maxTokensInput = document.getElementById("max-tokens");
+      const modelSelect = document.getElementById("model");
+
+      function buildConfig() {
+        const temperature = parseFloat(temperatureInput.value);
+        const topP = parseFloat(topPInput.value);
+        const maxTokens = parseInt(maxTokensInput.value, 10);
+        const model = modelSelect.value || null;
+
+        const config = {
+          temperature: Number.isFinite(temperature) ? temperature : 0.2,
+          top_p: Number.isFinite(topP) ? topP : 0.9,
+        };
+
+        if (Number.isFinite(maxTokens)) {
+          config.max_tokens = maxTokens;
+        }
+        if (model) {
+          config.model = model;
+        }
+
+        temperatureValue.textContent = config.temperature.toFixed(2);
+        topPValue.textContent = config.top_p.toFixed(2);
+
+        return config;
+      }
+
+      // Initialize config preview
+      buildConfig();
+
+      [temperatureInput, topPInput, maxTokensInput, modelSelect].forEach(
+        (el) => {
+          el.addEventListener("input", buildConfig);
+        }
+      );
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+
+        const githubUrl = urlInput.value.trim();
+        if (!githubUrl) {
+          statusEl.textContent = "Please enter a GitHub repository URL.";
+          statusEl.classList.add("error");
+          resultEl.style.display = "none";
+          return;
+        }
+
+        statusEl.textContent = "Summarizing repository...";
+        statusEl.classList.remove("error");
+        submitButton.disabled = true;
+        resultEl.style.display = "none";
+        summaryEl.textContent = "";
+        technologiesEl.innerHTML = "";
+        structureEl.textContent = "";
+
+        const config = buildConfig();
+
+        try {
+          const response = await fetch("/summarize", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ github_url: githubUrl, config }),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            statusEl.textContent =
+              "Error: " + (data.message || "Unexpected error occurred.");
+            statusEl.classList.add("error");
+            resultEl.style.display = "none";
+            return;
+          }
+
+          statusEl.textContent = "";
+          summaryEl.textContent = data.summary || "";
+
+          technologiesEl.innerHTML = "";
+          if (Array.isArray(data.technologies)) {
+            data.technologies.forEach((tech) => {
+              const li = document.createElement("li");
+              li.textContent = tech;
+              technologiesEl.appendChild(li);
+            });
+          }
+
+          structureEl.textContent = data.structure || "";
+          resultEl.style.display = "block";
+        } catch (error) {
+          console.error(error);
+          statusEl.textContent =
+            "Network error while calling /summarize. Please try again.";
+          statusEl.classList.add("error");
+          resultEl.style.display = "none";
+        } finally {
+          submitButton.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
