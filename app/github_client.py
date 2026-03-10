@@ -1,12 +1,13 @@
-import base64
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict
 from urllib.parse import urlparse
+import subprocess
+import tempfile
+import shutil
 
-import httpx
 from fastapi import HTTPException
 
-from .config import get_settings
-from .models import ParsedRepo, RepoMetadata, TreeItem
+from .models import ParsedRepo, RepoMetadata
 
 
 def parse_github_url(url: str) -> ParsedRepo:
@@ -41,179 +42,135 @@ def parse_github_url(url: str) -> ParsedRepo:
     return ParsedRepo(owner=owner, repo=repo, branch=branch)
 
 
-def _handle_github_error(response: httpx.Response) -> None:
-    message = ""
+def clone_repo(parsed: ParsedRepo) -> Path:
+    """
+    Clone the repository via git (prefer SSH, fall back to HTTPS) into a
+    temporary directory and return the path to the cloned repo.
+    """
     try:
-        data = response.json()
-        message = str(data.get("message") or "")
-    except Exception:
-        message = ""
-
-    if response.status_code == 404:
+        tmp_root = Path(tempfile.mkdtemp(prefix="repo_clone_"))
+    except Exception as exc:  
         raise HTTPException(
-            status_code=404,
-            detail={"status": "error", "message": "Repository not found or not public"},
+            status_code=500,
+            detail={
+                "status": "error",
+                "message": "Failed to create temporary directory for cloning repository",
+            },
+        ) from exc
+
+    repo_dir = tmp_root / parsed.repo
+
+    def _run_clone(remote: str) -> subprocess.CompletedProcess[str]:
+        cmd = ["git", "clone", "--depth", "1"]
+        if parsed.branch:
+            cmd += ["--branch", parsed.branch]
+        cmd += [remote, str(repo_dir)]
+        return subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=120,
         )
 
-    if response.status_code in (401, 403):
-        # Distinguish rate limits from generic auth issues where possible.
-        if "API rate limit exceeded" in message:
-            detail_msg = (
-                "GitHub API rate limit exceeded. Set a GITHUB_TOKEN environment "
-                "variable or try again later."
-            )
-        else:
-            detail_msg = (
-                "GitHub API request unauthorized. Ensure the repository is public "
-                "or set a GITHUB_TOKEN environment variable."
-            )
+    # SSH -> fallback to HTTPS cloning
+    ssh_remote = f"git@github.com:{parsed.owner}/{parsed.repo}.git"
+    https_remote = f"https://github.com/{parsed.owner}/{parsed.repo}.git"
+
+    try:
+        result = _run_clone(ssh_remote)
+    except FileNotFoundError as exc:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "message": "git is not installed or not available on PATH",
+            },
+        ) from exc
+    except Exception as exc:  # pragma: no cover - defensive
+        shutil.rmtree(tmp_root, ignore_errors=True)
         raise HTTPException(
             status_code=502,
             detail={
                 "status": "error",
-                "message": detail_msg,
+                "message": "Failed to clone repository via git",
+            },
+        ) from exc
+
+    # HTTPs
+    if result.returncode != 0:
+        result = _run_clone(https_remote)
+
+    if result.returncode != 0:
+        msg = result.stderr.strip() or result.stdout.strip() or "Unknown git error"
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "status": "error",
+                "message": f"Failed to clone repository via git: {msg}",
             },
         )
 
-    raise HTTPException(
-        status_code=502,
-        detail={
-            "status": "error",
-            "message": f"GitHub API error: HTTP {response.status_code}",
-        },
-    )
-
-
-def get_repo_metadata(parsed: ParsedRepo) -> RepoMetadata:
-    settings = get_settings()
-    url = f"{settings.github_api_base}/repos/{parsed.owner}/{parsed.repo}"
-    headers = {
-        "User-Agent": "github-repo-summarizer",
-        "Accept": "application/vnd.github+json",
-    }
-    if settings.github_token:
-        headers["Authorization"] = f"Bearer {settings.github_token}"
-
-    try:
-        response = httpx.get(url, headers=headers, timeout=10.0)
-    except httpx.RequestError:
+    if not repo_dir.exists():
+        shutil.rmtree(tmp_root, ignore_errors=True)
         raise HTTPException(
             status_code=502,
-            detail={"status": "error", "message": "Failed to reach GitHub API"},
+            detail={
+                "status": "error",
+                "message": "Repository clone completed but target directory was not found",
+            },
         )
 
-    if response.status_code != 200:
-        _handle_github_error(response)
-
-    data = response.json()
-    return RepoMetadata(
-        name=data.get("name") or f"{parsed.owner}/{parsed.repo}",
-        full_name=data.get("full_name") or f"{parsed.owner}/{parsed.repo}",
-        description=data.get("description"),
-        html_url=data.get("html_url") or f"https://github.com/{parsed.owner}/{parsed.repo}",
-        stargazers_count=int(data.get("stargazers_count") or 0),
-        forks_count=int(data.get("forks_count") or 0),
-        default_branch=data.get("default_branch") or "main",
-    )
+    return repo_dir
 
 
-def get_languages(parsed: ParsedRepo) -> Dict[str, int]:
-    settings = get_settings()
-    url = f"{settings.github_api_base}/repos/{parsed.owner}/{parsed.repo}/languages"
-    headers = {
-        "User-Agent": "github-repo-summarizer",
-        "Accept": "application/vnd.github+json",
-    }
-    if settings.github_token:
-        headers["Authorization"] = f"Bearer {settings.github_token}"
-
-    try:
-        response = httpx.get(url, headers=headers, timeout=10.0)
-    except httpx.RequestError:
-        raise HTTPException(
-            status_code=502,
-            detail={"status": "error", "message": "Failed to reach GitHub API"},
-        )
-
-    if response.status_code == 404:
-        # Keep behavior consistent with metadata call
-        _handle_github_error(response)
-    elif response.status_code != 200:
-        _handle_github_error(response)
-
-    data = response.json()
-    return {str(k): int(v) for k, v in data.items()}
-
-
-def get_repo_tree(parsed: ParsedRepo, ref: str) -> List[TreeItem]:
-    settings = get_settings()
-    url = f"{settings.github_api_base}/repos/{parsed.owner}/{parsed.repo}/git/trees/{ref}"
-    headers = {
-        "User-Agent": "github-repo-summarizer",
-        "Accept": "application/vnd.github+json",
-    }
-    if settings.github_token:
-        headers["Authorization"] = f"Bearer {settings.github_token}"
-
-    try:
-        response = httpx.get(url, headers=headers, params={"recursive": 1}, timeout=15.0)
-    except httpx.RequestError:
-        raise HTTPException(
-            status_code=502,
-            detail={"status": "error", "message": "Failed to reach GitHub API"},
-        )
-
-    if response.status_code != 200:
-        _handle_github_error(response)
-
-    data = response.json()
-    tree_items: List[TreeItem] = []
-    for entry in data.get("tree", []):
-        if entry.get("type") not in ("blob", "tree"):
-            continue
-        tree_items.append(
-            TreeItem(
-                path=entry.get("path", ""),
-                type=entry.get("type", ""),
-                size=entry.get("size"),
-            )
-        )
-    return tree_items
-
-
-def get_file_content(parsed: ParsedRepo, path: str, ref: str) -> str:
+def build_repo_metadata(parsed: ParsedRepo, repo_path: Path) -> RepoMetadata:
     """
-    Fetch file content from the GitHub contents API and return it as a text string.
-    Non-text or missing content results in an empty string.
+    Build minimal repository metadata from local clone and URL structure.
     """
-    settings = get_settings()
-    url = f"{settings.github_api_base}/repos/{parsed.owner}/{parsed.repo}/contents/{path}"
-    headers = {
-        "User-Agent": "github-repo-summarizer",
-        "Accept": "application/vnd.github+json",
-    }
-    if settings.github_token:
-        headers["Authorization"] = f"Bearer {settings.github_token}"
+
+    description = None
+    readme_candidates = [
+        "README.md",
+        "README.rst",
+        "README.txt",
+        "README",
+    ]
+    for name in readme_candidates:
+        candidate = repo_path / name
+        if candidate.exists():
+            try:
+                text = candidate.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+            if paragraphs:
+                description = paragraphs[0]
+            break
+
+    default_branch = "main"
     try:
-        response = httpx.get(url, headers=headers, params={"ref": ref}, timeout=10.0)
-    except httpx.RequestError:
-        raise HTTPException(
-            status_code=502,
-            detail={"status": "error", "message": "Failed to reach GitHub API"},
+        result = subprocess.run(
+            ["git", "-C", str(repo_path), "rev-parse", "--abbrev-ref", "HEAD"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
         )
-
-    if response.status_code != 200:
-        _handle_github_error(response)
-
-    data = response.json()
-    content = data.get("content")
-    encoding = data.get("encoding")
-    if not content or encoding != "base64":
-        # Binary or unsupported content
-        return ""
-
-    try:
-        decoded_bytes = base64.b64decode(content)
-        return decoded_bytes.decode("utf-8", errors="replace")
+        if result.returncode == 0:
+            branch = result.stdout.strip() or "HEAD"
+            default_branch = branch
     except Exception:
-        return ""
+        pass
+
+    return RepoMetadata(
+        name=parsed.repo,
+        full_name=f"{parsed.owner}/{parsed.repo}",
+        description=description,
+        html_url=f"https://github.com/{parsed.owner}/{parsed.repo}",
+        stargazers_count=0,
+        forks_count=0,
+        default_branch=parsed.branch or default_branch,
+    )

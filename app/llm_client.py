@@ -151,7 +151,6 @@ def parse_llm_result(
         structure = str(data.get("structure", "")).strip()
 
         if summary and structure:
-            # Deduplicate technologies while preserving order
             seen = set()
             deduped_technologies = []
             for tech in technologies:
@@ -165,12 +164,11 @@ def parse_llm_result(
                 structure=structure,
             )
 
-    # Fallback: use raw text and analysis hints
+    # fallback
     fallback_summary = raw_text.strip()
     if not fallback_summary:
         fallback_summary = "Summary not available from the language model."
     else:
-        # Take only the first paragraph to keep it concise
         paragraphs = [p.strip() for p in fallback_summary.split("\n\n") if p.strip()]
         if paragraphs:
             fallback_summary = paragraphs[0]

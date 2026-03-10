@@ -1,0 +1,129 @@
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  margin: 0;
+  padding: 0;
+  background-color: #f7f7f8;
+  color: #111827;
+}
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 3rem;
+}
+
+h1 {
+  font-size: 1.8rem;
+  margin-bottom: 0.5rem;
+}
+
+p.description {
+  margin-top: 0;
+  color: #4b5563;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+label {
+  font-weight: 500;
+}
+
+input[type="text"] {
+  padding: 0.6rem 0.8rem;
+  border-radius: 0.375rem;
+  border: 1px solid #d1d5db;
+  font-size: 0.95rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+button {
+  align-self: flex-start;
+  padding: 0.6rem 1.2rem;
+  border-radius: 0.375rem;
+  border: none;
+  background-color: #2563eb;
+  color: white;
+  font-weight: 500;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+button:disabled {
+  background-color: #9ca3af;
+  cursor: not-allowed;
+}
+
+#status {
+  margin-top: 1rem;
+  min-height: 1.2rem;
+  color: #6b7280;
+  font-size: 0.9rem;
+}
+
+.error {
+  color: #b91c1c;
+}
+
+.result {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #e5e7eb;
+}
+
+.result-section {
+  margin-bottom: 1.5rem;
+}
+
+.result-section h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+}
+
+.result-section p,
+.result-section ul {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.config-section input[type="range"],
+.config-section input[type="number"],
+.config-section select {
+  width: 100%;
+  max-width: 100%;
+}
+
+.layout {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 2rem;
+  margin-top: 1.5rem;
+  align-items: flex-start;
+}
+
+.main-column {
+  flex: 2;
+  min-width: 0;
+}
+
+.side-panel {
+  flex: 1;
+  min-width: 260px;
+  max-width: 340px;
+  padding: 1rem 1rem 1.5rem;
+  border-radius: 0.75rem;
+  border: 1px solid #e5e7eb;
+  background-color: #f9fafb;
+}
+
+.config-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}

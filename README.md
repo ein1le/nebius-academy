@@ -1,6 +1,9 @@
 # GitHub Repository Summarizer
 
-This project is a small FastAPI service that accepts a public GitHub repository URL, analyzes the repository structure and key files, and uses OpenAI to generate a human‑readable summary.
+This project is a small FastAPI service that accepts a public GitHub repository URL, analyzes the repository structure and key files, and uses OpenAI to generate a human‑readable summary. 
+This application clones repositories via SSH with an HTTPS clone as a fallback. 
+This avoids GitHub API rate limits and matches typical production setups where CI and services access code using SSH deploy keys.
+It is a submission to the Nebius Academy Performance Engineering admission assignment
 
 It exposes:
 
@@ -11,13 +14,12 @@ It exposes:
 
 - Python 3.10+
 - An OpenAI API key (`OPENAI_API_KEY`)
- - (Optional but recommended) A GitHub personal access token (`GITHUB_TOKEN`) for higher rate limits
 
 ## Setup
 
-1. Clone this repository and change into its directory.
+1. Clone this repository to a local directory
 
-2. (Recommended) Create and activate a virtual environment:
+2. Create and activate a virtual environment:
 
    ```bash
    python -m venv .venv
@@ -37,16 +39,31 @@ It exposes:
    setx OPENAI_API_KEY "sk-..."          # Windows (PowerShell)
    ```
 
-   Additionally, you can set an optional GitHub token to avoid hitting unauthenticated
-   rate limits when summarizing multiple repositories:
-
-   ```bash
-   export GITHUB_TOKEN="ghp_..."          # Linux/macOS
-   setx GITHUB_TOKEN "ghp_..."            # Windows (PowerShell)
-   ```
-
-   Both `OPENAI_API_KEY` and `GITHUB_TOKEN` can also be placed in a `.env` file and
+   `OPENAI_API_KEY` can also be placed in a `.env` file and
    will be loaded automatically.
+
+5. Configure SSH for `git clone`:
+
+   The backend clones repositories using `git` (preferring SSH). To avoid prompts and make this work smoothly:
+
+   - Generate a key if you do not have one:
+
+     ```bash
+     ssh-keygen -t ed25519 -C "your_email@example.com"
+     ```
+
+     Accept the default location (e.g. `~/.ssh/id_ed25519`) and set a passphrase if you like.
+
+   - Copy the contents of `id_ed25519.pub` and add it to GitHub under
+     **Settings → SSH and GPG keys → New SSH key**.
+
+   - Test your setup:
+
+     ```bash
+     ssh -T git@github.com
+     ```
+
+   If SSH is not configured or fails, the app will fall back to cloning over HTTPS, but SSH is preferred.
 
 ## Running the Server
 
@@ -68,7 +85,7 @@ curl -X POST http://localhost:8000/summarize \
   -d '{"github_url": "https://github.com/psf/requests"}'
 ```
 
-You can optionally control the language model configuration via a `config` object:
+Optionally control the language model configuration via a `config` object:
 
 ```bash
 curl -X POST http://localhost:8000/summarize \
@@ -109,7 +126,7 @@ After starting the server, open your browser at:
 
 - `http://localhost:8000/`
 
-You will see a simple form:
+Simple form display:
 
 - Paste a GitHub repository URL (e.g., `https://github.com/psf/requests`).
 - Click **Summarize**.
@@ -120,13 +137,3 @@ You will see a simple form:
 - Only public repositories on `github.com` are supported.
 - The service uses a heuristic selection of files (README, docs, manifests, key source files) to stay within the LLM context window.
 - Summaries depend on the quality of the OpenAI model and may not capture every detail of very large or complex projects.
-
-## Development Notes
-
-- Main code lives under `app/`:
-  - `app/main.py` — FastAPI app and routes.
-  - `app/github_client.py` — GitHub API integration and URL parsing.
-  - `app/repo_analysis.py` — Repository file selection and structure analysis.
-  - `app/llm_client.py` — OpenAI integration and prompt handling.
-  - `app/config.py` — Configuration and environment handling.
-- Static frontend is in `static/index.html`.

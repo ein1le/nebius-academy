@@ -4,17 +4,14 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+import shutil
 
 from .config import get_settings
-from .github_client import (
-    get_languages,
-    get_repo_metadata,
-    get_repo_tree,
-    parse_github_url,
-)
+from .github_client import build_repo_metadata, clone_repo, parse_github_url
 from .llm_client import build_summary_prompt, call_llm, parse_llm_result
 from .models import ErrorResponse, SummarizeRequest, SummarizeResponse
-from .repo_analysis import analyze_repo
+from repo_analysis.repo_analysis import analyze_repo
 
 
 app = FastAPI(title="GitHub Repo Summarizer")
@@ -42,9 +39,11 @@ async def validation_exception_handler(request, exc: RequestValidationError):
     )
 
 
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request, exc: Exception):
-    # Fail closed with a generic error while avoiding leaking internals.
     return JSONResponse(
         status_code=500,
         content={
@@ -79,7 +78,6 @@ def get_index():
     },
 )
 def summarize(body: SummarizeRequest) -> SummarizeResponse:
-    # Ensure configuration is valid (e.g., OPENAI_API_KEY present)
     try:
         get_settings()
     except RuntimeError as exc:
@@ -100,6 +98,7 @@ def summarize(body: SummarizeRequest) -> SummarizeResponse:
             },
         )
 
+    repo_path = None
     try:
         parsed_repo = parse_github_url(github_url)
     except ValueError as exc:
@@ -108,13 +107,20 @@ def summarize(body: SummarizeRequest) -> SummarizeResponse:
             detail={"status": "error", "message": str(exc)},
         ) from exc
 
-    repo_metadata = get_repo_metadata(parsed_repo)
-    languages = get_languages(parsed_repo)
-    ref = parsed_repo.branch or repo_metadata.default_branch
-    tree_items = get_repo_tree(parsed_repo, ref)
+    # clone repo
+    repo_path = clone_repo(parsed_repo)
+    repo_metadata = build_repo_metadata(parsed_repo, repo_path)
 
-    analysis = analyze_repo(parsed_repo, ref, tree_items, languages)
+    analysis = analyze_repo(parsed_repo, repo_path)
     system_prompt, user_prompt = build_summary_prompt(repo_metadata, analysis)
     raw_response = call_llm(system_prompt, user_prompt, config=body.config)
     result = parse_llm_result(raw_response, analysis)
+
+    # clean
+    if repo_path is not None:
+        try:
+            shutil.rmtree(repo_path.parent, ignore_errors=True)
+        except Exception:
+            pass
+
     return result
